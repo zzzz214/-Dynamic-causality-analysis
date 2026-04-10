@@ -28,6 +28,9 @@ def run_reservoir(data, resSize=50, dim=1, gamma=1.0, rho_target=0.67):
     return mapstd(rtotal)
 
 def evaluate_sw_rcm(Cause_Data, Effect_Res, w_start, w_end, Tp, beta=1e-5, scale=5.0):
+    """
+    使用 Effect(t) 预测 Cause(t - Tp)。Tp > 0 代表 Cause 发生在前。
+    """
     t_idx = np.arange(w_start, w_end)
     valid = (t_idx - Tp >= 0) & (t_idx - Tp < Cause_Data.shape[1]) & (t_idx < Effect_Res.shape[1])
     t_valid = t_idx[valid]
@@ -95,7 +98,7 @@ def generate_3_4(L=4500):
 # ==========================================
 # 3. 运行四大实验并生成顶级画板
 # ==========================================
-print("开始运行终极对齐版 3.1-3.4 核心复现...")
+print("开始运行纯粹指数版 3.1-3.4 核心复现...")
 
 fig, axes = plt.subplots(2, 3, figsize=(16, 10))
 plt.subplots_adjust(hspace=0.3, wspace=0.25)
@@ -109,7 +112,7 @@ Rx1, Ry1 = run_reservoir(D_x1), run_reservoir(D_y1)
 L_list = np.arange(100, 3100, 100)
 rho_XY_31, rho_YX_31 = [], []
 for l in L_list:
-    rho_XY_31.append(evaluate_sw_rcm(D_x1, Ry1, 0, l, Tp=1)) # l=0 对应 Tp=1
+    rho_XY_31.append(evaluate_sw_rcm(D_x1, Ry1, 0, l, Tp=1)) 
     rho_YX_31.append(evaluate_sw_rcm(D_y1, Rx1, 0, l, Tp=1))
 
 ax = axes[0, 0]
@@ -120,7 +123,7 @@ ax.set_title("3.1: Sensitivity to Series Length L\n(RCM L-curve shape proves eff
 ax.set_xlabel("Time Series Length L"); ax.set_ylabel(r"$\rho$ (RCM Index)")
 ax.legend()
 
-# --- 实验 3.4 ---
+# --- 实验 3.4 (摒弃转换魔法，原汁原味) ---
 print("  >> 计算 3.4...")
 x4, y4 = generate_3_4()
 D_x4, D_y4 = mapstd(x4.reshape(1,-1)), mapstd(y4.reshape(1,-1))
@@ -128,30 +131,30 @@ Rx4, Ry4 = run_reservoir(D_x4), run_reservoir(D_y4)
 
 w_size = 500; w_step = 100
 n_windows_4 = (4500 - w_size) // w_step + 1
-pearson_abs, eq_corr_XY, eq_corr_YX = [], [], []
+pearson_abs, rcm_XY_4, rcm_YX_4 = [], [], []
 
 for w in range(n_windows_4):
     start = w * w_step; end = start + w_size
     pearson_abs.append(np.abs(np.corrcoef(x4[start:end], y4[start:end])[0, 1]))
     
-    rcm_xy = evaluate_sw_rcm(D_x4, Ry4, start, end, Tp=0)
-    rcm_yx = evaluate_sw_rcm(D_y4, Rx4, start, end, Tp=0)
-    
-    # 【核心魔法】：将 RCM 指数反推回“等效相关系数”，完美重叠原文皮尔逊线
-    eq_corr_XY.append(np.sqrt(np.maximum(0, 1 + np.log(rcm_xy + 1e-12) / 5.0)))
-    eq_corr_YX.append(np.sqrt(np.maximum(0, 1 + np.log(rcm_yx + 1e-12) / 5.0)))
+    # 纯净的原始 RCM 指数度量
+    rcm_XY_4.append(evaluate_sw_rcm(D_x4, Ry4, start, end, Tp=0))
+    rcm_YX_4.append(evaluate_sw_rcm(D_y4, Rx4, start, end, Tp=0))
 
 ax = axes[1, 0]
 w_idx = np.arange(1, n_windows_4 + 1)
+
+# 同一坐标轴下的真实对比
 ax.plot(w_idx, pearson_abs, 'b-', label='Pearson absolute', linewidth=2)
-ax.plot(w_idx, eq_corr_XY, 'orange', label=r'Eq. Corr from RCM: $X \to Y$')
-ax.plot(w_idx, eq_corr_YX, 'g-', label=r'Eq. Corr from RCM: $Y \to X$')
-ax.set_title("3.4: Correlation vs RCM\n(RCM Equivalent Correlation overlaps Pearson)", fontsize=11, fontweight='bold')
-ax.set_xlabel("Window"); ax.set_ylabel("Correlation Measurement")
+ax.plot(w_idx, rcm_XY_4, 'orange', label=r'RCM: $X \to Y$', linewidth=2)
+ax.plot(w_idx, rcm_YX_4, 'g-', label=r'RCM: $Y \to X$', linewidth=2)
+
+ax.set_title("3.4: Correlation vs RCM\n(RCM strictly penalizes weak linear correlation)", fontsize=11, fontweight='bold')
+ax.set_xlabel("Window"); ax.set_ylabel("Correlation / RCM Index")
 ax.legend(loc='upper right')
 
-# --- 热力图公共设置 (应用 l = 1 - Tp 映射) ---
-L_range = np.arange(-10, 11) # 原文的 Time delay l
+# --- 热力图公共设置 ---
+L_range = np.arange(-10, 11) 
 n_windows = (3000 - w_size) // w_step + 1
 
 def generate_heatmap(Cause_Data, Effect_Res, ax_obj, title):
@@ -159,12 +162,11 @@ def generate_heatmap(Cause_Data, Effect_Res, ax_obj, title):
     for w in range(n_windows):
         start = w * w_step; end = start + w_size
         for i, l in enumerate(L_range):
-            # 【核心修正】：完美映射原文的延迟定义
             tp = 1 - l 
             hm_data[i, w] = evaluate_sw_rcm(Cause_Data, Effect_Res, start, end, Tp=tp)
             
     c = ax_obj.pcolormesh(np.arange(1, n_windows+1), L_range, hm_data, shading='nearest', cmap='viridis', vmin=0, vmax=1)
-    ax_obj.invert_yaxis() # 【核心修正】：翻转Y轴对齐原文 (-10在最上)
+    ax_obj.invert_yaxis() 
     ax_obj.set_title(title, fontweight='bold')
     ax_obj.set_xlabel("Window"); ax_obj.set_ylabel("Time Delay ($l$)")
     return c
